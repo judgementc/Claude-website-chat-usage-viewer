@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Claude Usage Monitor",
+  "version": "1.1",
+  "description": "实时显示Claude使用量和重置倒计时",
+  "permissions": ["cookies", "storage", "tabs", "scripting"],
+  "host_permissions": ["https://claude.ai/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
