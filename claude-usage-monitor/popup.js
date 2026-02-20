@@ -100,15 +100,21 @@ function executeInPage(orgId, anonymousId, deviceId) {
     'anthropic-device-id': deviceId || ''
   };
 
-  // 1. Usage API
-  var usageP = fetch('https://claude.ai/api/organizations/' + orgId + '/usage', {
+  // 1. Usage API (cache-busted)
+  var usageP = fetch('https://claude.ai/api/organizations/' + orgId + '/usage?_t=' + Date.now(), {
     method: 'GET', credentials: 'include', headers: headers
   }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
 
-  // 2. RSC flight data from settings/usage page
-  var rscP = fetch('https://claude.ai/settings/usage', {
+  // 2. RSC flight data from settings/usage page (cache-busted)
+  var rscP = fetch('https://claude.ai/settings/usage?_t=' + Date.now(), {
     credentials: 'include',
-    headers: { 'RSC': '1', 'Next-Url': '/settings/usage', 'Accept': 'text/x-component' }
+    headers: {
+      'RSC': '1',
+      'Next-Url': '/settings/usage',
+      'Accept': 'text/x-component',
+      'Cache-Control': 'no-cache, no-store',
+      'Pragma': 'no-cache'
+    }
   })
     .then(function (r) { return r.text(); })
     .then(function (text) {
