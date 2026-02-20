@@ -1,18 +1,5 @@
 let countdownInterval = null;
 
-// ─── Cookie Extraction ───
-function extractIdsFromCookies(cookies) {
-  const result = { orgId: null, anonymousId: null, deviceId: null };
-  for (const cookie of cookies) {
-    switch (cookie.name) {
-      case 'lastActiveOrg': result.orgId = cookie.value; break;
-      case 'ajs_anonymous_id': result.anonymousId = cookie.value; break;
-      case 'anthropic-device-id': result.deviceId = cookie.value; break;
-    }
-  }
-  return result;
-}
-
 // ─── Color Helpers ───
 function getUsageColor(pct) {
   if (pct >= 90) return '#ef4444';
@@ -28,7 +15,7 @@ function formatCountdown(resetTime) {
   const h = Math.floor(diff / 3600000);
   const m = Math.floor((diff % 3600000) / 60000);
   const s = Math.floor((diff % 60000) / 1000);
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  return `${h}`.padStart(2, '0') + ':' + `${m}`.padStart(2, '0') + ':' + `${s}`.padStart(2, '0');
 }
 
 function formatResetBadge(resetTime) {
@@ -36,73 +23,74 @@ function formatResetBadge(resetTime) {
   if (diff <= 0) return 'Resetting...';
   const h = Math.floor(diff / 3600000);
   const m = Math.floor((diff % 3600000) / 60000);
-  if (h > 0) return `Resets in ${h} hr ${m} min`;
-  return `Resets in ${m} min`;
+  if (h > 0) return 'Resets in ' + h + ' hr ' + m + ' min';
+  return 'Resets in ' + m + ' min';
 }
 
 function formatResetDate(resetTime) {
-  const d = new Date(resetTime);
-  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(resetTime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function formatMonthlyReset(dateStr) {
-  const d = new Date(dateStr);
-  return `Resets ${d.toLocaleString('en-US', { month: 'short', day: 'numeric' })}`;
+  return 'Resets ' + new Date(dateStr).toLocaleString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// ─── Circular Ring Update ───
+// ─── Ring Update ───
 function updateRing(pct) {
   const ring = document.getElementById('ringFill');
-  const circumference = 2 * Math.PI * 34;
-  const offset = circumference - (pct / 100) * circumference;
-  ring.style.strokeDashoffset = offset;
+  const c = 2 * Math.PI * 34;
+  ring.style.strokeDashoffset = c - (pct / 100) * c;
   ring.style.stroke = getUsageColor(pct);
-  document.getElementById('ringPercent').textContent = `${pct}%`;
+  document.getElementById('ringPercent').textContent = pct + '%';
 }
 
-// ─── Countdown Timer ───
+// ─── Countdown ───
 function startCountdown(resetTime) {
   if (countdownInterval) clearInterval(countdownInterval);
-  const countdownEl = document.getElementById('countdown');
-  const badgeEl = document.getElementById('resetBadge');
-  const update = () => {
-    countdownEl.textContent = formatCountdown(resetTime);
-    badgeEl.textContent = formatResetBadge(resetTime);
-    const diff = new Date(resetTime) - new Date();
-    const hours = diff / 3600000;
-    if (hours < 1) countdownEl.style.color = '#22c55e';
-    else if (hours < 2) countdownEl.style.color = '#f59e0b';
-    else countdownEl.style.color = '#1a1a1a';
+  const el = document.getElementById('countdown');
+  const badge = document.getElementById('resetBadge');
+  const tick = () => {
+    el.textContent = formatCountdown(resetTime);
+    badge.textContent = formatResetBadge(resetTime);
+    const h = (new Date(resetTime) - new Date()) / 3600000;
+    el.style.color = h < 1 ? '#22c55e' : h < 2 ? '#f59e0b' : '#1a1a1a';
   };
-  update();
-  countdownInterval = setInterval(update, 1000);
+  tick();
+  countdownInterval = setInterval(tick, 1000);
 }
 
-// ─── Status Helpers ───
-function setStatus(status, text) {
-  const dot = document.getElementById('statusDot');
-  dot.className = 'status-dot ' + status;
-  document.getElementById('statusText').textContent = text || (status === 'loading' ? 'Loading' : status === 'error' ? 'Error' : 'Connected');
+// ─── Status ───
+function setStatus(s, t) {
+  document.getElementById('statusDot').className = 'status-dot ' + s;
+  document.getElementById('statusText').textContent = t || (s === 'loading' ? 'Loading' : s === 'error' ? 'Error' : 'Connected');
 }
-
-function showError(message) {
+function showError(msg) {
   const el = document.getElementById('error');
-  el.textContent = message;
-  el.classList.add('show');
+  el.textContent = msg; el.classList.add('show');
   setStatus('error', 'Error');
 }
-
-function hideError() {
-  document.getElementById('error').classList.remove('show');
-}
-
+function hideError() { document.getElementById('error').classList.remove('show'); }
 function updateLastUpdate() {
-  document.getElementById('lastUpdate').textContent = `Last updated: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+  document.getElementById('lastUpdate').textContent = 'Last updated: ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
-// ─── API Call: Usage endpoint ───
-function fetchUsageAPI(orgId, anonymousId, deviceId) {
-  const headers = {
+// ─── Cookie Extraction ───
+function extractIdsFromCookies(cookies) {
+  const r = { orgId: null, anonymousId: null, deviceId: null };
+  for (const c of cookies) {
+    if (c.name === 'lastActiveOrg') r.orgId = c.value;
+    else if (c.name === 'ajs_anonymous_id') r.anonymousId = c.value;
+    else if (c.name === 'anthropic-device-id') r.deviceId = c.value;
+  }
+  return r;
+}
+
+// ══════════════════════════════════════════════════
+// This function runs INSIDE the claude.ai page context.
+// It must be 100% self-contained — no outside references.
+// ══════════════════════════════════════════════════
+function executeInPage(orgId, anonymousId, deviceId) {
+  var headers = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
     'anthropic-anonymous-id': anonymousId || '',
@@ -112,252 +100,149 @@ function fetchUsageAPI(orgId, anonymousId, deviceId) {
     'anthropic-device-id': deviceId || ''
   };
 
-  return fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
-    method: 'GET', credentials: 'include', headers
-  }).then(r => r.ok ? r.json() : null).catch(() => null);
-}
+  // 1. Usage API
+  var usageP = fetch('https://claude.ai/api/organizations/' + orgId + '/usage', {
+    method: 'GET', credentials: 'include', headers: headers
+  }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
 
-// ─── Scrape settings/usage page via RSC Flight Data ───
-function fetchSettingsRSC() {
-  // Next.js App Router uses RSC (React Server Components) for data.
-  // When navigating client-side, the browser sends "RSC: 1" header.
-  // We replicate this to get the serialized data.
-  const rscHeaders = {
-    'RSC': '1',
-    'Next-Url': '/settings/usage',
-    'Accept': 'text/x-component',
-  };
-
-  return fetch('https://claude.ai/settings/usage', {
+  // 2. RSC flight data from settings/usage page
+  var rscP = fetch('https://claude.ai/settings/usage', {
     credentials: 'include',
-    headers: rscHeaders
+    headers: { 'RSC': '1', 'Next-Url': '/settings/usage', 'Accept': 'text/x-component' }
   })
-    .then(r => r.text())
-    .then(text => {
-      console.log('[Claude Usage Monitor] RSC response length:', text.length);
-      console.log('[Claude Usage Monitor] RSC first 2000 chars:', text.substring(0, 2000));
+    .then(function (r) { return r.text(); })
+    .then(function (text) {
+      console.log('[Claude Usage Monitor] RSC length:', text.length);
+      console.log('[Claude Usage Monitor] RSC first 3000 chars:', text.substring(0, 3000));
 
-      const result = {};
+      var result = { raw_sample: text.substring(0, 500) };
 
-      // Parse credit data: {"amount":NNNN,"currency":"USD","auto_reload_settings":{...}}
-      const creditMatch = text.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"\s*,\s*"auto_reload_settings"\s*:\s*(\{[^}]+\})/);
-      if (creditMatch) {
-        result.credit = {
-          amount: parseInt(creditMatch[1]),
-          currency: creditMatch[2],
-          auto_reload_settings: JSON.parse(creditMatch[3])
-        };
+      // Credit: {"amount":NNNN,"currency":"USD",...}
+      var cm = text.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
+      if (cm) {
+        result.creditAmount = parseInt(cm[1]);
+        result.creditCurrency = cm[2];
       }
 
-      // Fallback: just find amount + currency
-      if (!result.credit) {
-        const simpleCredit = text.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
-        if (simpleCredit) {
-          result.credit = { amount: parseInt(simpleCredit[1]), currency: simpleCredit[2] };
-          // Try to find auto_reload separately
-          const arMatch = text.match(/"auto_reload_settings"\s*:\s*\{[^}]*"enabled"\s*:\s*(true|false)[^}]*\}/);
-          if (arMatch) {
-            try {
-              result.credit.auto_reload_settings = JSON.parse(arMatch[0].replace('"auto_reload_settings":', ''));
-            } catch (e) { }
-          }
-        }
+      // Auto-reload
+      var arm = text.match(/"enabled"\s*:\s*(true|false)\s*,\s*"threshold_in_minor_units"\s*:\s*(\d+)\s*,\s*"reload_to_in_minor_units"\s*:\s*(\d+)/);
+      if (arm) {
+        result.autoReloadEnabled = arm[1] === 'true';
+        result.autoReloadThreshold = parseInt(arm[2]);
+        result.autoReloadTo = parseInt(arm[3]);
       }
 
-      // Parse extra usage spending data
-      // Look for patterns like: spent or usage_amount followed by a number
-      const spentPatterns = [
-        /\$(\d+\.?\d*)\s*spent/i,
-        /"spent"\s*:\s*(\d+\.?\d*)/,
-        /"usage_amount"\s*:\s*(\d+\.?\d*)/,
-        /"extra_usage_amount"\s*:\s*(\d+\.?\d*)/,
-        /"metered_spend"\s*:\s*(\d+\.?\d*)/,
-      ];
-      for (const pat of spentPatterns) {
-        const m = text.match(pat);
-        if (m) {
-          result.extraSpent = parseFloat(m[1]);
-          break;
-        }
-      }
+      // Dollar amounts like $4.06
+      var dollarMatches = text.match(/\$\d+\.?\d*/g);
+      if (dollarMatches) result.dollarAmounts = dollarMatches;
 
-      // Look for percentage used
-      const pctPatterns = [
-        /(\d+)%\s*used/i,
-        /"percent_used"\s*:\s*(\d+)/,
-        /"utilization"\s*:\s*(\d+)/,
-      ];
-      for (const pat of pctPatterns) {
-        const m = text.match(pat);
-        if (m) {
-          result.extraPct = parseInt(m[1]);
-          break;
-        }
-      }
+      // "X% used"
+      var pm = text.match(/(\d+)%\s*used/i);
+      if (pm) result.pctUsed = parseInt(pm[1]);
 
-      // Look for spending limit
-      const limitPatterns = [
-        /"spending_limit"\s*:\s*(\d+\.?\d*)/,
-        /"monthly_limit"\s*:\s*(\d+\.?\d*)/,
-        /"extra_usage_limit"\s*:\s*(\d+\.?\d*)/,
-      ];
-      for (const pat of limitPatterns) {
-        const m = text.match(pat);
-        if (m) {
-          result.extraLimit = parseFloat(m[1]);
-          break;
-        }
-      }
+      // "$X.XX spent"
+      var sm = text.match(/\$(\d+\.?\d*)\s*spent/i);
+      if (sm) result.amountSpent = parseFloat(sm[1]);
 
-      // Look for reset dates
-      const resetPatterns = [
-        /"resets_at"\s*:\s*"([^"]+)"/,
-        /"reset_date"\s*:\s*"([^"]+)"/,
-        /"period_end"\s*:\s*"([^"]+)"/,
-        /"billing_cycle_end"\s*:\s*"([^"]+)"/,
-      ];
-      for (const pat of resetPatterns) {
-        const m = text.match(pat);
-        if (m) {
-          result.resetDate = m[1];
-          break;
-        }
-      }
+      // Reset dates
+      var rm = text.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
+      if (rm) result.resetText = rm[0];
 
       return result;
     })
-    .catch(e => {
-      console.log('[Claude Usage Monitor] RSC fetch error:', e.message);
-      return {};
+    .catch(function (e) {
+      console.log('[Claude Usage Monitor] RSC error:', e.message);
+      return { error: e.message };
     });
-}
 
-// ─── Scrape the DOM if on settings/usage page ───
-function scrapeSettingsDOM() {
-  // Only works if the current page IS settings/usage
-  if (!window.location.pathname.includes('/settings/usage')) {
-    return null;
+  // 3. DOM scraping (only if on settings/usage page)
+  var dom = null;
+  if (window.location.pathname.indexOf('/settings/usage') !== -1) {
+    console.log('[Claude Usage Monitor] On settings page, scraping DOM...');
+    dom = {};
+    var bodyText = document.body.innerText || '';
+
+    var ds = bodyText.match(/\$(\d+\.?\d*)\s*spent/i);
+    if (ds) dom.spent = parseFloat(ds[1]);
+
+    var dp = bodyText.match(/(\d+)%\s*used/i);
+    if (dp) dom.pctUsed = parseInt(dp[1]);
+
+    var dr = bodyText.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
+    if (dr) dom.resetText = dr[0];
+
+    var dd = bodyText.match(/\$\d+\.\d{2}/g);
+    if (dd) dom.dollarAmounts = dd;
+
+    dom.hasAutoReload = bodyText.indexOf('auto-reload') !== -1 || bodyText.indexOf('Auto-reload') !== -1;
   }
 
-  console.log('[Claude Usage Monitor] On settings/usage page, scraping DOM...');
-  const result = {};
-  const body = document.body.innerText;
-
-  // Find "$X.XX spent"
-  const spentMatch = body.match(/\$(\d+\.?\d*)\s*spent/i);
-  if (spentMatch) result.extraSpent = parseFloat(spentMatch[1]);
-
-  // Find "X% used"
-  const pctMatch = body.match(/(\d+)%\s*used/i);
-  if (pctMatch) result.extraPct = parseInt(pctMatch[1]);
-
-  // Find "Resets Mon DD"
-  const resetMatch = body.match(/Resets\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
-  if (resetMatch) result.resetText = resetMatch[0];
-
-  // Find credit/balance amounts
-  const dollarMatches = body.match(/\$\d+\.\d{2}/g);
-  if (dollarMatches) result.dollarAmounts = dollarMatches;
-
-  // Find auto-reload
-  if (body.includes('auto-reload') || body.includes('Auto-reload') || body.includes('auto_reload')) {
-    result.hasAutoReload = true;
-    result.autoReloadOn = body.includes('auto-reload on') || body.includes('Auto-reload on');
-  }
-
-  return result;
+  return Promise.all([usageP, rscP]).then(function (results) {
+    return { usage: results[0], rsc: results[1], dom: dom };
+  });
 }
 
-// ─── Master function: executed in page context ───
-function executeInPage(orgId, anonymousId, deviceId) {
-  return Promise.all([
-    fetchUsageAPI(orgId, anonymousId, deviceId),
-    fetchSettingsRSC(),
-    Promise.resolve(scrapeSettingsDOM()),
-  ]).then(([usage, rsc, dom]) => ({ usage, rsc, dom }));
-}
-
-// ─── Render Credit Section ───
+// ─── Render Credit ───
 function renderCredit(data) {
-  let creditAmount = null;
-  let autoReload = null;
+  var amount = null, autoReload = false, reloadTo = 0, threshold = 0;
 
-  // Source 1: RSC data
-  if (data.rsc && data.rsc.credit) {
-    creditAmount = data.rsc.credit.amount / 100;
-    autoReload = data.rsc.credit.auto_reload_settings;
-  }
-
-  // Source 2: DOM scraping
-  if (creditAmount === null && data.dom && data.dom.dollarAmounts) {
-    // The largest dollar amount is likely the balance
-    const amounts = data.dom.dollarAmounts.map(s => parseFloat(s.replace('$', '')));
-    if (amounts.length > 0) {
-      creditAmount = Math.max(...amounts);
-      if (data.dom.autoReloadOn) autoReload = { enabled: true };
+  if (data.rsc) {
+    if (data.rsc.creditAmount) {
+      amount = data.rsc.creditAmount / 100;
+      autoReload = data.rsc.autoReloadEnabled || false;
+      reloadTo = (data.rsc.autoReloadTo || 0) / 100;
+      threshold = (data.rsc.autoReloadThreshold || 0) / 100;
     }
   }
 
-  if (creditAmount !== null) {
-    const card = document.getElementById('billingCard');
-    card.classList.remove('hidden');
-    document.getElementById('billingBalance').textContent = `$${creditAmount.toFixed(2)}`;
+  if (amount === null && data.dom && data.dom.dollarAmounts) {
+    var nums = data.dom.dollarAmounts.map(function (s) { return parseFloat(s.replace('$', '')); });
+    if (nums.length > 0) amount = Math.max.apply(null, nums);
+    autoReload = data.dom.hasAutoReload;
+  }
 
-    if (autoReload && autoReload.enabled) {
-      document.getElementById('autoReloadTag').classList.remove('hidden');
-    }
-
-    if (autoReload && autoReload.reload_to_in_minor_units) {
-      const reloadTo = autoReload.reload_to_in_minor_units / 100;
-      const threshold = (autoReload.threshold_in_minor_units || 0) / 100;
-      document.getElementById('billingLimit').textContent =
-        `Reload to $${reloadTo.toFixed(2)} at $${threshold.toFixed(2)}`;
+  if (amount !== null) {
+    document.getElementById('billingCard').classList.remove('hidden');
+    document.getElementById('billingBalance').textContent = '$' + amount.toFixed(2);
+    if (autoReload) document.getElementById('autoReloadTag').classList.remove('hidden');
+    if (reloadTo > 0) {
+      document.getElementById('billingLimit').textContent = 'Reload to $' + reloadTo.toFixed(2) + ' at $' + threshold.toFixed(2);
     }
   } else {
     console.log('[Claude Usage Monitor] No credit data found');
   }
 }
 
-// ─── Render Extra Usage Section ───
+// ─── Render Extra Usage ───
 function renderExtraUsage(data) {
-  let spent = null, limit = null, pct = null, resetText = null;
+  var spent = null, pct = null, resetText = null, limit = 40;
 
-  // Source 1: RSC data
+  // RSC
   if (data.rsc) {
-    if (data.rsc.extraSpent !== undefined) spent = data.rsc.extraSpent;
-    if (data.rsc.extraPct !== undefined) pct = data.rsc.extraPct;
-    if (data.rsc.extraLimit !== undefined) limit = data.rsc.extraLimit;
-    if (data.rsc.resetDate) resetText = formatMonthlyReset(data.rsc.resetDate);
+    if (data.rsc.amountSpent !== undefined) spent = data.rsc.amountSpent;
+    if (data.rsc.pctUsed !== undefined) pct = data.rsc.pctUsed;
+    if (data.rsc.resetText) resetText = data.rsc.resetText;
   }
-
-  // Source 2: usage.extra_usage (when non-null)
+  // usage.extra_usage
   if (spent === null && data.usage && data.usage.extra_usage) {
-    const eu = data.usage.extra_usage;
+    var eu = data.usage.extra_usage;
     spent = eu.spent || eu.amount;
-    limit = eu.limit || eu.cap;
     pct = eu.utilization;
-    if (eu.resets_at) resetText = formatMonthlyReset(eu.resets_at);
   }
-
-  // Source 3: DOM scraping
+  // DOM
   if (spent === null && data.dom) {
-    if (data.dom.extraSpent !== undefined) spent = data.dom.extraSpent;
-    if (data.dom.extraPct !== undefined) pct = data.dom.extraPct;
+    if (data.dom.spent !== undefined) spent = data.dom.spent;
+    if (data.dom.pctUsed !== undefined) pct = data.dom.pctUsed;
     if (data.dom.resetText) resetText = data.dom.resetText;
   }
 
-  if (spent !== null && spent !== undefined) {
-    const card = document.getElementById('extraUsageCard');
-    card.classList.remove('hidden');
-
-    limit = limit || 40;
-    if (pct === null) pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-
-    document.getElementById('extraSpent').textContent = `$${Number(spent).toFixed(2)} spent`;
-    document.getElementById('extraLimit').textContent = `of $${Number(limit).toFixed(2)}`;
-    document.getElementById('extraFill').style.width = `${Math.min(pct, 100)}%`;
-    document.getElementById('extraPercent').textContent = `${pct}% used`;
-
+  if (spent !== null) {
+    document.getElementById('extraUsageCard').classList.remove('hidden');
+    if (pct === null) pct = Math.round((spent / limit) * 100);
+    document.getElementById('extraSpent').textContent = '$' + spent.toFixed(2) + ' spent';
+    document.getElementById('extraLimit').textContent = 'of $' + limit.toFixed(2);
+    document.getElementById('extraFill').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('extraPercent').textContent = pct + '% used';
     if (resetText) {
       document.getElementById('extraResetDate').textContent = resetText;
       document.getElementById('extraResetBadge').textContent = resetText;
@@ -367,95 +252,74 @@ function renderExtraUsage(data) {
   }
 }
 
-// ─── Main Fetch ───
+// ─── Main ───
 async function fetchUsage() {
   hideError();
   setStatus('loading', 'Loading');
-
   try {
-    const cookies = await chrome.cookies.getAll({ domain: 'claude.ai' });
-    const ids = extractIdsFromCookies(cookies);
+    var cookies = await chrome.cookies.getAll({ domain: 'claude.ai' });
+    var ids = extractIdsFromCookies(cookies);
+    if (!ids.orgId) { showError('Please log in to claude.ai first'); return; }
 
-    if (!ids.orgId) {
-      showError('Please log in to claude.ai first');
-      return;
-    }
+    var tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+    if (tabs.length === 0) { showError('Please open a claude.ai tab first'); return; }
 
-    const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
-    if (tabs.length === 0) {
-      showError('Please open a claude.ai tab first');
-      return;
-    }
-
-    const results = await chrome.scripting.executeScript({
+    var results = await chrome.scripting.executeScript({
       target: { tabId: tabs[0].id },
       func: executeInPage,
       args: [ids.orgId, ids.anonymousId, ids.deviceId]
     });
 
-    if (!results || results.length === 0 || !results[0].result) {
+    if (!results || !results.length || !results[0].result) {
       throw new Error('Script execution failed');
     }
 
-    const data = results[0].result;
+    var data = results[0].result;
+    console.log('[Claude Usage Monitor] Usage:', JSON.stringify(data.usage, null, 2));
+    console.log('[Claude Usage Monitor] RSC:', JSON.stringify(data.rsc, null, 2));
+    console.log('[Claude Usage Monitor] DOM:', JSON.stringify(data.dom, null, 2));
 
-    // Debug
-    console.log('[Claude Usage Monitor] Usage:', data.usage ? JSON.stringify(data.usage, null, 2) : 'null');
-    console.log('[Claude Usage Monitor] RSC parsed:', JSON.stringify(data.rsc, null, 2));
-    console.log('[Claude Usage Monitor] DOM scraped:', JSON.stringify(data.dom, null, 2));
-
-    // 1. Plan Usage
+    // Plan Usage
     if (data.usage && data.usage.five_hour) {
-      const fh = data.usage.five_hour;
-      updateRing(Math.round(fh.utilization));
-      startCountdown(fh.resets_at);
-      document.getElementById('resetTime').textContent = formatResetDate(fh.resets_at);
+      updateRing(Math.round(data.usage.five_hour.utilization));
+      startCountdown(data.usage.five_hour.resets_at);
+      document.getElementById('resetTime').textContent = formatResetDate(data.usage.five_hour.resets_at);
     } else {
       document.getElementById('ringPercent').textContent = 'N/A';
       document.getElementById('countdown').textContent = '--:--:--';
     }
 
-    // 2. Extra Usage
     renderExtraUsage(data);
-
-    // 3. Credit
     renderCredit(data);
-
     setStatus('', 'Connected');
     updateLastUpdate();
     chrome.storage.local.set({ cachedData: data, lastUpdate: Date.now() });
 
   } catch (e) {
     console.error('[Claude Usage Monitor] Fetch error:', e);
-    showError(`Failed to fetch: ${e.message}`);
-
+    showError('Failed to fetch: ' + e.message);
     try {
-      const cached = await chrome.storage.local.get(['cachedData', 'lastUpdate']);
+      var cached = await chrome.storage.local.get(['cachedData', 'lastUpdate']);
       if (cached.cachedData) {
-        const data = cached.cachedData;
-        if (data.usage && data.usage.five_hour) {
-          updateRing(Math.round(data.usage.five_hour.utilization));
-          if (data.usage.five_hour.resets_at) startCountdown(data.usage.five_hour.resets_at);
+        var d = cached.cachedData;
+        if (d.usage && d.usage.five_hour) {
+          updateRing(Math.round(d.usage.five_hour.utilization));
+          if (d.usage.five_hour.resets_at) startCountdown(d.usage.five_hour.resets_at);
         }
-        renderExtraUsage(data);
-        renderCredit(data);
-        document.getElementById('lastUpdate').textContent =
-          `Cached: ${new Date(cached.lastUpdate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+        renderExtraUsage(d);
+        renderCredit(d);
+        document.getElementById('lastUpdate').textContent = 'Cached: ' + new Date(cached.lastUpdate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       }
-    } catch (ce) {
-      console.error('[Claude Usage Monitor] Cache error:', ce);
-    }
+    } catch (ce) { }
   }
 }
 
-// ─── Event Listeners ───
 document.getElementById('refreshBtn').addEventListener('click', fetchUsage);
-document.getElementById('openClaudeBtn').addEventListener('click', () => {
+document.getElementById('openClaudeBtn').addEventListener('click', function () {
   chrome.tabs.create({ url: 'https://claude.ai' });
 });
-document.getElementById('openSettingsBtn').addEventListener('click', () => {
+document.getElementById('openSettingsBtn').addEventListener('click', function () {
   chrome.tabs.create({ url: 'https://claude.ai/settings/usage' });
 });
 
-// ─── Init ───
 fetchUsage();
