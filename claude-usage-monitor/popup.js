@@ -53,7 +53,7 @@ function formatMonthlyReset(dateStr) {
 // ─── Circular Ring Update ───
 function updateRing(pct) {
   const ring = document.getElementById('ringFill');
-  const circumference = 2 * Math.PI * 34; // r=34
+  const circumference = 2 * Math.PI * 34;
   const offset = circumference - (pct / 100) * circumference;
   ring.style.strokeDashoffset = offset;
   ring.style.stroke = getUsageColor(pct);
@@ -115,113 +115,231 @@ function executeInPage(orgId, anonymousId, deviceId) {
   };
 
   const fetchJson = (url) => fetch(url, { method: 'GET', credentials: 'include', headers })
-    .then(res => res.ok ? res.json() : null)
-    .catch(() => null);
+    .then(res => {
+      if (!res.ok) return { _status: res.status, _url: url };
+      return res.json();
+    })
+    .catch(e => ({ _error: e.message, _url: url }));
 
   const base = `https://claude.ai/api/organizations/${orgId}`;
 
-  return Promise.all([
+  // Strategy 1: Try many possible API endpoints
+  const apiPromises = Promise.all([
     fetchJson(`${base}/usage`),
     fetchJson(`${base}/credit`),
+    fetchJson(`${base}/credits`),
+    fetchJson(`${base}/billing`),
     fetchJson(`${base}/subscription`),
+    fetchJson(`${base}/settings/billing`),
+    fetchJson(`${base}/prepaid_credits`),
     fetchJson(`${base}/extra_usage`),
-    fetchJson(`${base}/metered_usage`),
-  ]).then(([usage, credit, subscription, extraUsage, meteredUsage]) => ({
-    usage, credit, subscription, extraUsage, meteredUsage
+  ]).then(([usage, credit, credits, billing, subscription, settingsBilling, prepaidCredits, extraUsage]) => ({
+    usage, credit, credits, billing, subscription, settingsBilling, prepaidCredits, extraUsage
+  }));
+
+  // Strategy 2: Parse settings/usage page HTML for embedded data
+  const pagePromise = fetch('https://claude.ai/settings/usage', {
+    credentials: 'include',
+    headers: { 'Accept': 'text/html' }
+  })
+    .then(res => res.text())
+    .then(html => {
+      const result = { pageData: null };
+
+      // Try __NEXT_DATA__
+      const nextMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (nextMatch) {
+        try {
+          result.pageData = JSON.parse(nextMatch[1]);
+        } catch (e) { }
+      }
+
+      // Try to find JSON-like data with credit/amount patterns
+      const creditMatch = html.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
+      if (creditMatch) {
+        result.creditFromHtml = {
+          amount: parseInt(creditMatch[1]),
+          currency: creditMatch[2]
+        };
+      }
+
+      // Try to find auto_reload_settings in page
+      const reloadMatch = html.match(/"auto_reload_settings"\s*:\s*(\{[^}]+\})/);
+      if (reloadMatch) {
+        try {
+          result.autoReloadFromHtml = JSON.parse(reloadMatch[1]);
+        } catch (e) { }
+      }
+
+      // Try to find extra usage / spending data patterns
+      const spentMatch = html.match(/\$(\d+\.?\d*)\s*spent/i);
+      if (spentMatch) {
+        result.extraSpentFromHtml = parseFloat(spentMatch[1]);
+      }
+
+      const pctMatch = html.match(/(\d+)%\s*used/i);
+      if (pctMatch) {
+        result.extraPctFromHtml = parseInt(pctMatch[1]);
+      }
+
+      // Look for RSC / flight data chunks
+      const rscChunks = [];
+      const rscRegex = /self\.__next_f\.push\(\[[\d,]*"([^"]+)"\]\)/g;
+      let m;
+      while ((m = rscRegex.exec(html)) !== null) {
+        rscChunks.push(m[1]);
+      }
+      if (rscChunks.length > 0) {
+        result.rscChunkCount = rscChunks.length;
+        // Search chunks for credit/amount data
+        const allChunks = rscChunks.join('');
+        const chunkCreditMatch = allChunks.match(/"amount"\s*:\s*(\d+)/);
+        if (chunkCreditMatch) {
+          result.creditFromRSC = parseInt(chunkCreditMatch[1]);
+        }
+        // Look for spent/used patterns
+        const chunkSpentMatch = allChunks.match(/(\d+\.?\d*)\s*spent/);
+        if (chunkSpentMatch) {
+          result.spentFromRSC = parseFloat(chunkSpentMatch[1]);
+        }
+      }
+
+      return result;
+    })
+    .catch(e => ({ _pageError: e.message }));
+
+  return Promise.all([apiPromises, pagePromise]).then(([api, page]) => ({
+    ...api,
+    page
   }));
 }
 
 // ─── Render Credit / Billing Section ───
 function renderCredit(data) {
-  const credit = data.credit;
-  if (!credit) {
-    console.log('[Claude Usage Monitor] No credit data available');
-    return;
+  let creditAmount = null;
+  let autoReload = null;
+
+  // Source 1: API endpoints
+  for (const key of ['credit', 'credits', 'billing', 'subscription', 'settingsBilling', 'prepaidCredits']) {
+    const src = data[key];
+    if (src && !src._status && !src._error) {
+      console.log(`[Claude Usage Monitor] ${key} response:`, JSON.stringify(src, null, 2));
+      if (src.amount !== undefined) {
+        creditAmount = src.amount / 100;
+        autoReload = src.auto_reload_settings;
+        break;
+      }
+      if (src.balance !== undefined) {
+        creditAmount = typeof src.balance === 'number' && src.balance > 100 ? src.balance / 100 : src.balance;
+        autoReload = src.auto_reload_settings || src.auto_reload;
+        break;
+      }
+    }
   }
 
-  console.log('[Claude Usage Monitor] Credit response:', JSON.stringify(credit, null, 2));
-
-  const card = document.getElementById('billingCard');
-  card.classList.remove('hidden');
-
-  // Amount is in minor units (cents) → divide by 100
-  const balanceDollars = (credit.amount || 0) / 100;
-  document.getElementById('billingBalance').textContent = `$${balanceDollars.toFixed(2)}`;
-
-  // Auto-reload settings
-  if (credit.auto_reload_settings && credit.auto_reload_settings.enabled) {
-    const tag = document.getElementById('autoReloadTag');
-    tag.classList.remove('hidden');
-    tag.textContent = 'auto-reload on';
+  // Source 2: Settings page HTML parsing
+  if (creditAmount === null && data.page) {
+    if (data.page.creditFromHtml) {
+      creditAmount = data.page.creditFromHtml.amount / 100;
+      autoReload = data.page.autoReloadFromHtml;
+    }
+    if (creditAmount === null && data.page.creditFromRSC) {
+      creditAmount = data.page.creditFromRSC / 100;
+    }
+    // Source 3: __NEXT_DATA__
+    if (creditAmount === null && data.page.pageData) {
+      const pd = data.page.pageData;
+      console.log('[Claude Usage Monitor] __NEXT_DATA__ keys:', Object.keys(pd));
+      // Try to deep-search for credit data
+      const deepSearch = (obj, depth = 0) => {
+        if (depth > 5 || !obj || typeof obj !== 'object') return null;
+        if (obj.amount !== undefined && obj.currency !== undefined) return obj;
+        for (const val of Object.values(obj)) {
+          const found = deepSearch(val, depth + 1);
+          if (found) return found;
+        }
+        return null;
+      };
+      const found = deepSearch(pd);
+      if (found) {
+        creditAmount = found.amount / 100;
+        autoReload = found.auto_reload_settings;
+      }
+    }
   }
 
-  // Spending limit from auto_reload_settings
-  if (credit.auto_reload_settings) {
-    const reloadTo = (credit.auto_reload_settings.reload_to_in_minor_units || 0) / 100;
-    const threshold = (credit.auto_reload_settings.threshold_in_minor_units || 0) / 100;
-    document.getElementById('billingLimit').textContent =
-      `Reload to $${reloadTo.toFixed(2)} at $${threshold.toFixed(2)}`;
+  if (creditAmount !== null) {
+    const card = document.getElementById('billingCard');
+    card.classList.remove('hidden');
+    document.getElementById('billingBalance').textContent = `$${creditAmount.toFixed(2)}`;
+
+    if (autoReload && autoReload.enabled) {
+      document.getElementById('autoReloadTag').classList.remove('hidden');
+    }
+
+    if (autoReload) {
+      const reloadTo = (autoReload.reload_to_in_minor_units || 0) / 100;
+      const threshold = (autoReload.threshold_in_minor_units || 0) / 100;
+      document.getElementById('billingLimit').textContent =
+        `Reload to $${reloadTo.toFixed(2)} at $${threshold.toFixed(2)}`;
+    }
+  } else {
+    console.log('[Claude Usage Monitor] No credit data found from any source');
   }
 }
 
 // ─── Render Extra Usage Section ───
 function renderExtraUsage(data) {
-  // Try dedicated extra_usage endpoint first
-  const extraEndpoint = data.extraUsage || data.meteredUsage;
-  if (extraEndpoint) {
-    console.log('[Claude Usage Monitor] Extra usage endpoint response:', JSON.stringify(extraEndpoint, null, 2));
-  }
-
-  // Try to extract from usage response
-  const usage = data.usage;
-  if (usage) {
-    console.log('[Claude Usage Monitor] Usage response keys:', Object.keys(usage));
-  }
-
-  // Try subscription data
-  const sub = data.subscription;
-  if (sub) {
-    console.log('[Claude Usage Monitor] Subscription response:', JSON.stringify(sub, null, 2));
-  }
-
-  // Attempt to render from any available source
   let spent = null, limit = null, pct = null, resetDate = null;
 
-  // Source 1: dedicated extra_usage endpoint
-  if (extraEndpoint) {
-    spent = extraEndpoint.spent || extraEndpoint.amount || extraEndpoint.usage_amount;
-    limit = extraEndpoint.limit || extraEndpoint.cap || extraEndpoint.spending_limit;
-    pct = extraEndpoint.utilization || extraEndpoint.percent_used;
-    resetDate = extraEndpoint.resets_at || extraEndpoint.reset_date || extraEndpoint.period_end;
-
-    // Handle minor units
-    if (spent !== null && spent > 100) {
-      spent = spent / 100;
-      if (limit) limit = limit / 100;
-    }
-  }
-
-  // Source 2: usage.extra_usage (when non-null)
-  if (spent === null && usage && usage.extra_usage) {
-    const eu = usage.extra_usage;
+  // Source 1: API extra_usage endpoint
+  const eu = data.extraUsage;
+  if (eu && !eu._status && !eu._error) {
+    console.log('[Claude Usage Monitor] Extra usage endpoint:', JSON.stringify(eu, null, 2));
     spent = eu.spent || eu.amount || eu.usage_amount;
     limit = eu.limit || eu.cap || eu.spending_limit;
     pct = eu.utilization || eu.percent_used;
     resetDate = eu.resets_at || eu.reset_date || eu.period_end;
   }
 
-  // Source 3: subscription data
-  if (spent === null && sub) {
-    spent = sub.extra_usage_spent || sub.metered_spend;
-    limit = sub.extra_usage_limit || sub.spending_cap;
-    resetDate = sub.billing_cycle_end || sub.period_end;
+  // Source 2: usage.extra_usage (when non-null)
+  if (spent === null && data.usage && data.usage.extra_usage) {
+    const ue = data.usage.extra_usage;
+    spent = ue.spent || ue.amount;
+    limit = ue.limit || ue.cap;
+    pct = ue.utilization;
+    resetDate = ue.resets_at || ue.reset_date;
+  }
+
+  // Source 3: HTML page scraping
+  if (spent === null && data.page) {
+    if (data.page.extraSpentFromHtml !== undefined) {
+      spent = data.page.extraSpentFromHtml;
+    }
+    if (data.page.extraPctFromHtml !== undefined) {
+      pct = data.page.extraPctFromHtml;
+    }
+    if (data.page.spentFromRSC !== undefined && spent === null) {
+      spent = data.page.spentFromRSC;
+    }
+  }
+
+  // Source 4: subscription data
+  for (const key of ['subscription', 'billing', 'settingsBilling']) {
+    if (spent !== null) break;
+    const src = data[key];
+    if (src && !src._status && !src._error) {
+      spent = src.extra_usage_spent || src.metered_spend || src.extra_usage_amount;
+      limit = src.extra_usage_limit || src.spending_cap || src.spending_limit;
+      resetDate = src.billing_cycle_end || src.period_end;
+    }
   }
 
   if (spent !== null && spent !== undefined) {
     const card = document.getElementById('extraUsageCard');
     card.classList.remove('hidden');
 
-    limit = limit || 40; // Default Pro spending limit
+    limit = limit || 40;
     if (pct === null) pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
 
     document.getElementById('extraSpent').textContent = `$${Number(spent).toFixed(2)} spent`;
@@ -234,7 +352,7 @@ function renderExtraUsage(data) {
       document.getElementById('extraResetBadge').textContent = formatMonthlyReset(resetDate);
     }
   } else {
-    console.log('[Claude Usage Monitor] No extra usage data found in any endpoint');
+    console.log('[Claude Usage Monitor] No extra usage data found');
   }
 }
 
@@ -269,7 +387,19 @@ async function fetchUsage() {
     }
 
     const data = results[0].result;
-    console.log('[Claude Usage Monitor] All API data:', data);
+
+    // Log all endpoint results for debugging
+    console.log('[Claude Usage Monitor] === FULL DEBUG ===');
+    for (const [key, val] of Object.entries(data)) {
+      if (key === 'page') {
+        console.log(`[Claude Usage Monitor] page:`, val);
+      } else if (val && !val._status && !val._error) {
+        console.log(`[Claude Usage Monitor] ${key}:`, JSON.stringify(val, null, 2));
+      } else if (val && (val._status || val._error)) {
+        console.log(`[Claude Usage Monitor] ${key}: HTTP ${val._status || 'ERR'} (${val._url})`);
+      }
+    }
+    console.log('[Claude Usage Monitor] === END DEBUG ===');
 
     // 1. Plan Usage (five_hour)
     if (data.usage && data.usage.five_hour) {
@@ -281,7 +411,6 @@ async function fetchUsage() {
       startCountdown(resetTime);
       document.getElementById('resetTime').textContent = formatResetDate(resetTime);
     } else {
-      console.warn('[Claude Usage Monitor] No five_hour data in usage response');
       document.getElementById('ringPercent').textContent = 'N/A';
       document.getElementById('countdown').textContent = '--:--:--';
     }
@@ -303,22 +432,18 @@ async function fetchUsage() {
     console.error('[Claude Usage Monitor] Fetch error:', e);
     showError(`Failed to fetch: ${e.message}`);
 
-    // Try cache
     try {
       const cached = await chrome.storage.local.get(['cachedData', 'lastUpdate']);
       if (cached.cachedData) {
         const data = cached.cachedData;
-
         if (data.usage && data.usage.five_hour) {
-          const pct = Math.round(data.usage.five_hour.utilization);
-          updateRing(pct);
+          updateRing(Math.round(data.usage.five_hour.utilization));
           if (data.usage.five_hour.resets_at) startCountdown(data.usage.five_hour.resets_at);
         }
-
         renderExtraUsage(data);
         renderCredit(data);
-
-        document.getElementById('lastUpdate').textContent = `Cached: ${new Date(cached.lastUpdate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+        document.getElementById('lastUpdate').textContent =
+          `Cached: ${new Date(cached.lastUpdate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
       }
     } catch (ce) {
       console.error('[Claude Usage Monitor] Cache error:', ce);
