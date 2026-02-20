@@ -31,10 +31,6 @@ function formatResetDate(resetTime) {
   return new Date(resetTime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function formatMonthlyReset(dateStr) {
-  return 'Resets ' + new Date(dateStr).toLocaleString('en-US', { month: 'short', day: 'numeric' });
-}
-
 // ─── Ring Update ───
 function updateRing(pct) {
   const ring = document.getElementById('ringFill');
@@ -86,11 +82,12 @@ function extractIdsFromCookies(cookies) {
 }
 
 // ══════════════════════════════════════════════════
-// This function runs INSIDE the claude.ai page context.
-// It must be 100% self-contained — no outside references.
+// Runs INSIDE any claude.ai page context.
+// 100% self-contained. Fetches ALL data via same-origin requests.
+// No need to be on settings page — just any claude.ai tab.
 // ══════════════════════════════════════════════════
 function executeInPage(orgId, anonymousId, deviceId) {
-  var headers = {
+  var apiHeaders = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
     'anthropic-anonymous-id': anonymousId || '',
@@ -100,122 +97,140 @@ function executeInPage(orgId, anonymousId, deviceId) {
     'anthropic-device-id': deviceId || ''
   };
 
-  // 1. Usage API (cache-busted)
+  // 1. Usage API — always works
   var usageP = fetch('https://claude.ai/api/organizations/' + orgId + '/usage?_t=' + Date.now(), {
-    method: 'GET', credentials: 'include', headers: headers
+    method: 'GET', credentials: 'include', headers: apiHeaders
   }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
 
-  // 2. RSC flight data from settings/usage page (cache-busted)
-  var rscP = fetch('https://claude.ai/settings/usage?_t=' + Date.now(), {
+  // 2. Fetch settings/usage page as HTML (same-origin, cookies included automatically)
+  //    Parse the embedded Next.js data (self.__next_f.push chunks)
+  var pageP = fetch('https://claude.ai/settings/usage?_t=' + Date.now(), {
     credentials: 'include',
     headers: {
-      'RSC': '1',
-      'Next-Url': '/settings/usage',
-      'Accept': 'text/x-component',
-      'Cache-Control': 'no-cache, no-store',
+      'Accept': 'text/html,application/xhtml+xml',
+      'Cache-Control': 'no-cache',
       'Pragma': 'no-cache'
     }
   })
     .then(function (r) { return r.text(); })
-    .then(function (text) {
-      console.log('[Claude Usage Monitor] RSC length:', text.length);
-      console.log('[Claude Usage Monitor] RSC first 3000 chars:', text.substring(0, 3000));
+    .then(function (html) {
+      var result = {};
 
-      var result = { raw_sample: text.substring(0, 500) };
-
-      // Credit: {"amount":NNNN,"currency":"USD",...}
-      var cm = text.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
-      if (cm) {
-        result.creditAmount = parseInt(cm[1]);
-        result.creditCurrency = cm[2];
+      // Extract ALL self.__next_f.push() data chunks
+      var chunks = [];
+      var re = /self\.__next_f\.push\(\[[\d,]*"([\s\S]*?)"\]\)/g;
+      var m;
+      while ((m = re.exec(html)) !== null) {
+        // Unescape the string (handle \\n, \\", etc.)
+        try {
+          var decoded = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          chunks.push(decoded);
+        } catch (e) {
+          chunks.push(m[1]);
+        }
       }
 
-      // Auto-reload
-      var arm = text.match(/"enabled"\s*:\s*(true|false)\s*,\s*"threshold_in_minor_units"\s*:\s*(\d+)\s*,\s*"reload_to_in_minor_units"\s*:\s*(\d+)/);
-      if (arm) {
-        result.autoReloadEnabled = arm[1] === 'true';
-        result.autoReloadThreshold = parseInt(arm[2]);
-        result.autoReloadTo = parseInt(arm[3]);
+      // Also try non-string push format: self.__next_f.push([1, "..."])
+      var re2 = /self\.__next_f\.push\(\[\d+,"([\s\S]*?)"\]\)/g;
+      while ((m = re2.exec(html)) !== null) {
+        try {
+          var decoded2 = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          if (chunks.indexOf(decoded2) === -1) chunks.push(decoded2);
+        } catch (e) { }
       }
 
-      // Dollar amounts like $4.06
-      var dollarMatches = text.match(/\$\d+\.?\d*/g);
-      if (dollarMatches) result.dollarAmounts = dollarMatches;
+      var allText = chunks.join('\n');
+      console.log('[Claude Usage Monitor] Next.js chunks found:', chunks.length);
+      console.log('[Claude Usage Monitor] Combined chunk length:', allText.length);
 
-      // "X% used"
-      var pm = text.match(/(\d+)%\s*used/i);
-      if (pm) result.pctUsed = parseInt(pm[1]);
+      // --- Credit / Balance ---
+      // Pattern: {"amount":7959,"currency":"USD","auto_reload_settings":{"enabled":true,...}}
+      var creditMatch = allText.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
+      if (creditMatch) {
+        result.creditAmount = parseInt(creditMatch[1]);
+        result.creditCurrency = creditMatch[2];
+      }
 
-      // "$X.XX spent"
-      var sm = text.match(/\$(\d+\.?\d*)\s*spent/i);
-      if (sm) result.amountSpent = parseFloat(sm[1]);
+      // Auto-reload settings
+      var arMatch = allText.match(/"enabled"\s*:\s*(true|false)\s*,\s*"threshold_in_minor_units"\s*:\s*(\d+)\s*,\s*"reload_to_in_minor_units"\s*:\s*(\d+)/);
+      if (arMatch) {
+        result.autoReloadEnabled = arMatch[1] === 'true';
+        result.autoReloadThreshold = parseInt(arMatch[2]);
+        result.autoReloadTo = parseInt(arMatch[3]);
+      }
 
-      // Reset dates
-      var rm = text.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
-      if (rm) result.resetText = rm[0];
+      // --- Extra Usage ---
+      // "$X.XX spent" pattern in the page data
+      var spentMatch = allText.match(/\$(\d+\.?\d*)\s*spent/i);
+      if (spentMatch) result.extraSpent = parseFloat(spentMatch[1]);
+
+      // Reset date "Resets Mar 1" etc.
+      var resetMatch = allText.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
+      if (resetMatch) result.resetText = resetMatch[0];
+
+      // Spending limit - look for $40 pattern near "spending" or "limit"
+      var limitMatch = allText.match(/\$(\d+)\s*(?:spending|limit|monthly)/i);
+      if (limitMatch) result.spendingLimit = parseInt(limitMatch[1]);
+
+      // Also search for JSON patterns
+      var jsonSpentMatch = allText.match(/"(?:spent|usage_amount|extra_usage_spent)"\s*:\s*(\d+\.?\d*)/);
+      if (jsonSpentMatch && !result.extraSpent) result.extraSpent = parseFloat(jsonSpentMatch[1]);
+
+      var jsonLimitMatch = allText.match(/"(?:spending_limit|monthly_limit|extra_usage_limit|cap)"\s*:\s*(\d+\.?\d*)/);
+      if (jsonLimitMatch) result.spendingLimit = parseFloat(jsonLimitMatch[1]);
+
+      // If no chunks found, try the raw HTML
+      if (chunks.length === 0) {
+        console.log('[Claude Usage Monitor] No Next.js chunks, trying raw HTML...');
+
+        var htmlCredit = html.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
+        if (htmlCredit) {
+          result.creditAmount = parseInt(htmlCredit[1]);
+          result.creditCurrency = htmlCredit[2];
+        }
+
+        var htmlSpent = html.match(/\$(\d+\.?\d*)\s*spent/i);
+        if (htmlSpent) result.extraSpent = parseFloat(htmlSpent[1]);
+
+        var htmlReset = html.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
+        if (htmlReset) result.resetText = htmlReset[0];
+
+        // Sample for debugging
+        result.htmlSample = html.substring(0, 2000);
+      }
 
       return result;
     })
     .catch(function (e) {
-      console.log('[Claude Usage Monitor] RSC error:', e.message);
+      console.error('[Claude Usage Monitor] Page fetch error:', e.message);
       return { error: e.message };
     });
 
-  // 3. DOM scraping (only if on settings/usage page)
-  var dom = null;
-  if (window.location.pathname.indexOf('/settings/usage') !== -1) {
-    console.log('[Claude Usage Monitor] On settings page, scraping DOM...');
-    dom = {};
-    var bodyText = document.body.innerText || '';
-
-    var ds = bodyText.match(/\$(\d+\.?\d*)\s*spent/i);
-    if (ds) dom.spent = parseFloat(ds[1]);
-
-    var dp = bodyText.match(/(\d+)%\s*used/i);
-    if (dp) dom.pctUsed = parseInt(dp[1]);
-
-    var dr = bodyText.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
-    if (dr) dom.resetText = dr[0];
-
-    var dd = bodyText.match(/\$\d+\.\d{2}/g);
-    if (dd) dom.dollarAmounts = dd;
-
-    dom.hasAutoReload = bodyText.indexOf('auto-reload') !== -1 || bodyText.indexOf('Auto-reload') !== -1;
-  }
-
-  return Promise.all([usageP, rscP]).then(function (results) {
-    return { usage: results[0], rsc: results[1], dom: dom };
+  return Promise.all([usageP, pageP]).then(function (results) {
+    return { usage: results[0], page: results[1] };
   });
 }
 
 // ─── Render Credit ───
 function renderCredit(data) {
-  var amount = null, autoReload = false, reloadTo = 0, threshold = 0;
+  if (!data.page) return;
 
-  if (data.rsc) {
-    if (data.rsc.creditAmount) {
-      amount = data.rsc.creditAmount / 100;
-      autoReload = data.rsc.autoReloadEnabled || false;
-      reloadTo = (data.rsc.autoReloadTo || 0) / 100;
-      threshold = (data.rsc.autoReloadThreshold || 0) / 100;
-    }
-  }
-
-  if (amount === null && data.dom && data.dom.dollarAmounts) {
-    var nums = data.dom.dollarAmounts.map(function (s) { return parseFloat(s.replace('$', '')); });
-    if (nums.length > 0) amount = Math.max.apply(null, nums);
-    autoReload = data.dom.hasAutoReload;
-  }
-
-  if (amount !== null) {
+  if (data.page.creditAmount) {
+    var amount = data.page.creditAmount / 100;
     document.getElementById('billingCard').classList.remove('hidden');
     document.getElementById('billingBalance').textContent = '$' + amount.toFixed(2);
-    if (autoReload) document.getElementById('autoReloadTag').classList.remove('hidden');
-    if (reloadTo > 0) {
-      document.getElementById('billingLimit').textContent = 'Reload to $' + reloadTo.toFixed(2) + ' at $' + threshold.toFixed(2);
+
+    if (data.page.autoReloadEnabled) {
+      document.getElementById('autoReloadTag').classList.remove('hidden');
+    }
+    if (data.page.autoReloadTo) {
+      var reloadTo = data.page.autoReloadTo / 100;
+      var threshold = (data.page.autoReloadThreshold || 0) / 100;
+      document.getElementById('billingLimit').textContent =
+        'Reload to $' + reloadTo.toFixed(2) + ' at $' + threshold.toFixed(2);
     }
   } else {
-    console.log('[Claude Usage Monitor] No credit data found');
+    console.log('[Claude Usage Monitor] No credit data in page');
   }
 }
 
@@ -223,25 +238,21 @@ function renderCredit(data) {
 function renderExtraUsage(data) {
   var spent = null, resetText = null, limit = 40;
 
-  // RSC
-  if (data.rsc) {
-    if (data.rsc.amountSpent !== undefined) spent = data.rsc.amountSpent;
-    if (data.rsc.resetText) resetText = data.rsc.resetText;
+  // From page parsing
+  if (data.page) {
+    if (data.page.extraSpent !== undefined) spent = data.page.extraSpent;
+    if (data.page.resetText) resetText = data.page.resetText;
+    if (data.page.spendingLimit) limit = data.page.spendingLimit;
   }
-  // usage.extra_usage
+
+  // From usage API (if extra_usage becomes non-null)
   if (spent === null && data.usage && data.usage.extra_usage) {
     var eu = data.usage.extra_usage;
     spent = eu.spent || eu.amount;
   }
-  // DOM
-  if (spent === null && data.dom) {
-    if (data.dom.spent !== undefined) spent = data.dom.spent;
-    if (data.dom.resetText && !resetText) resetText = data.dom.resetText;
-  }
 
   if (spent !== null) {
     document.getElementById('extraUsageCard').classList.remove('hidden');
-    // Always calculate percentage from spent/limit (don't scrape — it picks up Plan Usage's %)
     var pct = Math.round((spent / limit) * 100);
     document.getElementById('extraSpent').textContent = '$' + spent.toFixed(2) + ' spent';
     document.getElementById('extraLimit').textContent = 'of $' + limit.toFixed(2);
@@ -252,10 +263,9 @@ function renderExtraUsage(data) {
       document.getElementById('extraResetBadge').textContent = resetText;
     }
   } else {
-    console.log('[Claude Usage Monitor] No extra usage data found');
+    console.log('[Claude Usage Monitor] No extra usage data');
   }
 }
-
 
 // ─── Main ───
 async function fetchUsage() {
@@ -266,32 +276,12 @@ async function fetchUsage() {
     var ids = extractIdsFromCookies(cookies);
     if (!ids.orgId) { showError('Please log in to claude.ai first'); return; }
 
-    var allTabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
-    if (allTabs.length === 0) { showError('Please open a claude.ai tab first'); return; }
-
-    // Find the settings/usage tab (best for DOM scraping) and any claude.ai tab
-    var settingsTab = null;
-    var anyTab = allTabs[0];
-    for (var i = 0; i < allTabs.length; i++) {
-      if (allTabs[i].url && allTabs[i].url.indexOf('/settings/usage') !== -1) {
-        settingsTab = allTabs[i];
-        break;
-      }
-    }
-
-    // Prefer settings tab, fall back to any tab
-    var targetTab = settingsTab || anyTab;
-    console.log('[Claude Usage Monitor] Using tab:', targetTab.url);
-
-    // If settings tab exists, reload it first to ensure fresh DOM
-    if (settingsTab) {
-      await chrome.tabs.reload(settingsTab.id);
-      // Wait for page to load
-      await new Promise(function (resolve) { setTimeout(resolve, 2000); });
-    }
+    // Use ANY claude.ai tab — no need for settings page
+    var tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+    if (tabs.length === 0) { showError('Please open a claude.ai tab first'); return; }
 
     var results = await chrome.scripting.executeScript({
-      target: { tabId: targetTab.id },
+      target: { tabId: tabs[0].id },
       func: executeInPage,
       args: [ids.orgId, ids.anonymousId, ids.deviceId]
     });
@@ -302,8 +292,7 @@ async function fetchUsage() {
 
     var data = results[0].result;
     console.log('[Claude Usage Monitor] Usage:', JSON.stringify(data.usage, null, 2));
-    console.log('[Claude Usage Monitor] RSC:', JSON.stringify(data.rsc, null, 2));
-    console.log('[Claude Usage Monitor] DOM:', JSON.stringify(data.dom, null, 2));
+    console.log('[Claude Usage Monitor] Page data:', JSON.stringify(data.page, null, 2));
 
     // Plan Usage
     if (data.usage && data.usage.five_hour) {
