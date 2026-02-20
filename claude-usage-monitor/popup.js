@@ -5,7 +5,7 @@ function extractIdsFromCookies(cookies) {
   const result = { orgId: null, anonymousId: null, deviceId: null };
   for (const cookie of cookies) {
     switch (cookie.name) {
-      case 'lastActiveOrg':   result.orgId = cookie.value; break;
+      case 'lastActiveOrg': result.orgId = cookie.value; break;
       case 'ajs_anonymous_id': result.anonymousId = cookie.value; break;
       case 'anthropic-device-id': result.deviceId = cookie.value; break;
     }
@@ -118,122 +118,123 @@ function executeInPage(orgId, anonymousId, deviceId) {
     .then(res => res.ok ? res.json() : null)
     .catch(() => null);
 
+  const base = `https://claude.ai/api/organizations/${orgId}`;
+
   return Promise.all([
-    fetchJson(`https://claude.ai/api/organizations/${orgId}/usage`),
-    fetchJson(`https://claude.ai/api/organizations/${orgId}/billing`),
-    fetchJson(`https://claude.ai/api/organizations/${orgId}/settings`)
-  ]).then(([usage, billing, settings]) => ({ usage, billing, settings }));
+    fetchJson(`${base}/usage`),
+    fetchJson(`${base}/credit`),
+    fetchJson(`${base}/subscription`),
+    fetchJson(`${base}/extra_usage`),
+    fetchJson(`${base}/metered_usage`),
+  ]).then(([usage, credit, subscription, extraUsage, meteredUsage]) => ({
+    usage, credit, subscription, extraUsage, meteredUsage
+  }));
+}
+
+// ─── Render Credit / Billing Section ───
+function renderCredit(data) {
+  const credit = data.credit;
+  if (!credit) {
+    console.log('[Claude Usage Monitor] No credit data available');
+    return;
+  }
+
+  console.log('[Claude Usage Monitor] Credit response:', JSON.stringify(credit, null, 2));
+
+  const card = document.getElementById('billingCard');
+  card.classList.remove('hidden');
+
+  // Amount is in minor units (cents) → divide by 100
+  const balanceDollars = (credit.amount || 0) / 100;
+  document.getElementById('billingBalance').textContent = `$${balanceDollars.toFixed(2)}`;
+
+  // Auto-reload settings
+  if (credit.auto_reload_settings && credit.auto_reload_settings.enabled) {
+    const tag = document.getElementById('autoReloadTag');
+    tag.classList.remove('hidden');
+    tag.textContent = 'auto-reload on';
+  }
+
+  // Spending limit from auto_reload_settings
+  if (credit.auto_reload_settings) {
+    const reloadTo = (credit.auto_reload_settings.reload_to_in_minor_units || 0) / 100;
+    const threshold = (credit.auto_reload_settings.threshold_in_minor_units || 0) / 100;
+    document.getElementById('billingLimit').textContent =
+      `Reload to $${reloadTo.toFixed(2)} at $${threshold.toFixed(2)}`;
+  }
 }
 
 // ─── Render Extra Usage Section ───
 function renderExtraUsage(data) {
-  // Try to find extra usage data from the usage response
+  // Try dedicated extra_usage endpoint first
+  const extraEndpoint = data.extraUsage || data.meteredUsage;
+  if (extraEndpoint) {
+    console.log('[Claude Usage Monitor] Extra usage endpoint response:', JSON.stringify(extraEndpoint, null, 2));
+  }
+
+  // Try to extract from usage response
   const usage = data.usage;
-  if (!usage) return;
+  if (usage) {
+    console.log('[Claude Usage Monitor] Usage response keys:', Object.keys(usage));
+  }
 
-  // Log full response for debugging
-  console.log('[Claude Usage Monitor] Full usage response:', JSON.stringify(usage, null, 2));
+  // Try subscription data
+  const sub = data.subscription;
+  if (sub) {
+    console.log('[Claude Usage Monitor] Subscription response:', JSON.stringify(sub, null, 2));
+  }
 
-  // Look for possible extra usage fields
-  const extra = usage.extra_usage || usage.monthly || usage.metered_usage || usage.consumption || null;
-  
-  if (!extra) {
-    // Try to extract from top-level fields
-    if (usage.extra_usage_amount !== undefined || usage.monthly_spend !== undefined) {
-      showExtraUsageFromFields(usage);
-      return;
+  // Attempt to render from any available source
+  let spent = null, limit = null, pct = null, resetDate = null;
+
+  // Source 1: dedicated extra_usage endpoint
+  if (extraEndpoint) {
+    spent = extraEndpoint.spent || extraEndpoint.amount || extraEndpoint.usage_amount;
+    limit = extraEndpoint.limit || extraEndpoint.cap || extraEndpoint.spending_limit;
+    pct = extraEndpoint.utilization || extraEndpoint.percent_used;
+    resetDate = extraEndpoint.resets_at || extraEndpoint.reset_date || extraEndpoint.period_end;
+
+    // Handle minor units
+    if (spent !== null && spent > 100) {
+      spent = spent / 100;
+      if (limit) limit = limit / 100;
     }
-    console.log('[Claude Usage Monitor] No extra usage data found in response. Available keys:', Object.keys(usage));
-    return;
   }
 
-  const card = document.getElementById('extraUsageCard');
-  card.classList.remove('hidden');
-
-  const spent = extra.spent || extra.amount || extra.used || 0;
-  const limit = extra.limit || extra.cap || extra.monthly_limit || 40;
-  const pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-  const resetDate = extra.resets_at || extra.reset_date || extra.period_end || null;
-
-  document.getElementById('extraSpent').textContent = `$${spent.toFixed(2)} spent`;
-  document.getElementById('extraLimit').textContent = `$${limit.toFixed(2)}`;
-  document.getElementById('extraFill').style.width = `${Math.min(pct, 100)}%`;
-  document.getElementById('extraPercent').textContent = `${pct}% used`;
-
-  if (resetDate) {
-    document.getElementById('extraResetDate').textContent = formatMonthlyReset(resetDate);
-    document.getElementById('extraResetBadge').textContent = formatMonthlyReset(resetDate);
-  }
-}
-
-function showExtraUsageFromFields(usage) {
-  const card = document.getElementById('extraUsageCard');
-  card.classList.remove('hidden');
-
-  const spent = usage.extra_usage_amount || usage.monthly_spend || 0;
-  const limit = usage.extra_usage_limit || usage.spending_limit || 40;
-  const pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-
-  document.getElementById('extraSpent').textContent = `$${Number(spent).toFixed(2)} spent`;
-  document.getElementById('extraLimit').textContent = `$${Number(limit).toFixed(2)}`;
-  document.getElementById('extraFill').style.width = `${Math.min(pct, 100)}%`;
-  document.getElementById('extraPercent').textContent = `${pct}% used`;
-}
-
-// ─── Render Billing Section ───
-function renderBilling(data) {
-  const billing = data.billing;
-  const settings = data.settings;
-
-  if (billing) {
-    console.log('[Claude Usage Monitor] Full billing response:', JSON.stringify(billing, null, 2));
-  }
-  if (settings) {
-    console.log('[Claude Usage Monitor] Full settings response:', JSON.stringify(settings, null, 2));
+  // Source 2: usage.extra_usage (when non-null)
+  if (spent === null && usage && usage.extra_usage) {
+    const eu = usage.extra_usage;
+    spent = eu.spent || eu.amount || eu.usage_amount;
+    limit = eu.limit || eu.cap || eu.spending_limit;
+    pct = eu.utilization || eu.percent_used;
+    resetDate = eu.resets_at || eu.reset_date || eu.period_end;
   }
 
-  // Try billing endpoint first
-  const billingData = billing || settings || null;
-  if (!billingData) {
-    console.log('[Claude Usage Monitor] No billing data available');
-    return;
+  // Source 3: subscription data
+  if (spent === null && sub) {
+    spent = sub.extra_usage_spent || sub.metered_spend;
+    limit = sub.extra_usage_limit || sub.spending_cap;
+    resetDate = sub.billing_cycle_end || sub.period_end;
   }
 
-  const card = document.getElementById('billingCard');
-
-  // Extract balance
-  const balance = billingData.balance || billingData.current_balance 
-    || billingData.credits || billingData.credit_balance
-    || (billingData.billing && billingData.billing.balance)
-    || null;
-
-  // Extract spending limit
-  const spendingLimit = billingData.spending_limit || billingData.monthly_limit
-    || billingData.monthly_spending_limit
-    || (billingData.billing && billingData.billing.spending_limit)
-    || null;
-
-  // Extract auto-reload status
-  const autoReload = billingData.auto_reload || billingData.auto_reload_enabled
-    || (billingData.billing && billingData.billing.auto_reload)
-    || null;
-
-  if (balance !== null || spendingLimit !== null) {
+  if (spent !== null && spent !== undefined) {
+    const card = document.getElementById('extraUsageCard');
     card.classList.remove('hidden');
 
-    if (balance !== null) {
-      const balStr = typeof balance === 'number' ? `$${balance.toFixed(2)}` : `$${balance}`;
-      document.getElementById('billingBalance').textContent = balStr;
-    }
+    limit = limit || 40; // Default Pro spending limit
+    if (pct === null) pct = limit > 0 ? Math.round((spent / limit) * 100) : 0;
 
-    if (spendingLimit !== null) {
-      const limStr = typeof spendingLimit === 'number' ? `$${spendingLimit.toFixed(2)}` : `$${spendingLimit}`;
-      document.getElementById('billingLimit').textContent = limStr;
-    }
+    document.getElementById('extraSpent').textContent = `$${Number(spent).toFixed(2)} spent`;
+    document.getElementById('extraLimit').textContent = `of $${Number(limit).toFixed(2)}`;
+    document.getElementById('extraFill').style.width = `${Math.min(pct, 100)}%`;
+    document.getElementById('extraPercent').textContent = `${pct}% used`;
 
-    if (autoReload) {
-      document.getElementById('autoReloadTag').classList.remove('hidden');
+    if (resetDate) {
+      document.getElementById('extraResetDate').textContent = formatMonthlyReset(resetDate);
+      document.getElementById('extraResetBadge').textContent = formatMonthlyReset(resetDate);
     }
+  } else {
+    console.log('[Claude Usage Monitor] No extra usage data found in any endpoint');
   }
 }
 
@@ -288,8 +289,8 @@ async function fetchUsage() {
     // 2. Extra Usage
     renderExtraUsage(data);
 
-    // 3. Billing / Spending Limit
-    renderBilling(data);
+    // 3. Credit / Spending
+    renderCredit(data);
 
     // Update status
     setStatus('', 'Connected');
@@ -315,7 +316,7 @@ async function fetchUsage() {
         }
 
         renderExtraUsage(data);
-        renderBilling(data);
+        renderCredit(data);
 
         document.getElementById('lastUpdate').textContent = `Cached: ${new Date(cached.lastUpdate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
       }
