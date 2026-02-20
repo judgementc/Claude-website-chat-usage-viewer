@@ -1,10 +1,31 @@
 {
   "manifest_version": 3,
   "name": "Claude Usage Monitor",
-  "version": "2.0",
+  "version": "2.1",
   "description": "Monitor Claude plan usage, extra usage spending, and billing in real-time",
-  "permissions": ["cookies", "storage", "tabs", "scripting"],
-  "host_permissions": ["https://claude.ai/*"],
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://claude.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/settings/usage*"
+      ],
+      "js": [
+        "contentScript.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
