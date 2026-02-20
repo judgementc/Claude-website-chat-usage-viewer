@@ -266,11 +266,32 @@ async function fetchUsage() {
     var ids = extractIdsFromCookies(cookies);
     if (!ids.orgId) { showError('Please log in to claude.ai first'); return; }
 
-    var tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
-    if (tabs.length === 0) { showError('Please open a claude.ai tab first'); return; }
+    var allTabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+    if (allTabs.length === 0) { showError('Please open a claude.ai tab first'); return; }
+
+    // Find the settings/usage tab (best for DOM scraping) and any claude.ai tab
+    var settingsTab = null;
+    var anyTab = allTabs[0];
+    for (var i = 0; i < allTabs.length; i++) {
+      if (allTabs[i].url && allTabs[i].url.indexOf('/settings/usage') !== -1) {
+        settingsTab = allTabs[i];
+        break;
+      }
+    }
+
+    // Prefer settings tab, fall back to any tab
+    var targetTab = settingsTab || anyTab;
+    console.log('[Claude Usage Monitor] Using tab:', targetTab.url);
+
+    // If settings tab exists, reload it first to ensure fresh DOM
+    if (settingsTab) {
+      await chrome.tabs.reload(settingsTab.id);
+      // Wait for page to load
+      await new Promise(function (resolve) { setTimeout(resolve, 2000); });
+    }
 
     var results = await chrome.scripting.executeScript({
-      target: { tabId: tabs[0].id },
+      target: { tabId: targetTab.id },
       func: executeInPage,
       args: [ids.orgId, ids.anonymousId, ids.deviceId]
     });
