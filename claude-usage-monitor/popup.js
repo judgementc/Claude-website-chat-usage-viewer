@@ -103,7 +103,6 @@ function executeInPage(orgId, anonymousId, deviceId) {
   }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
 
   // 2. Fetch settings/usage page as HTML (same-origin, cookies included automatically)
-  //    Parse the embedded Next.js data (self.__next_f.push chunks)
   var pageP = fetch('https://claude.ai/settings/usage?_t=' + Date.now(), {
     credentials: 'include',
     headers: {
@@ -112,97 +111,84 @@ function executeInPage(orgId, anonymousId, deviceId) {
       'Pragma': 'no-cache'
     }
   })
-    .then(function (r) { return r.text(); })
+    .then(function (r) {
+      console.log('[Claude Usage Monitor] Page response status:', r.status, r.statusText);
+      console.log('[Claude Usage Monitor] Page response URL:', r.url);
+      return r.text();
+    })
     .then(function (html) {
+      console.log('[Claude Usage Monitor] HTML length:', html.length);
+      console.log('[Claude Usage Monitor] HTML first 3000 chars:', html.substring(0, 3000));
+      console.log('[Claude Usage Monitor] HTML last 1000 chars:', html.substring(html.length - 1000));
+
       var result = {};
 
-      // Extract ALL self.__next_f.push() data chunks
-      var chunks = [];
-      var re = /self\.__next_f\.push\(\[[\d,]*"([\s\S]*?)"\]\)/g;
-      var m;
-      while ((m = re.exec(html)) !== null) {
-        // Unescape the string (handle \\n, \\", etc.)
-        try {
-          var decoded = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-          chunks.push(decoded);
-        } catch (e) {
-          chunks.push(m[1]);
+      // Count script tags
+      var scriptTags = html.match(/<script[^>]*>/g);
+      console.log('[Claude Usage Monitor] Script tags found:', scriptTags ? scriptTags.length : 0);
+
+      // Look for __next_f in any form
+      var hasNextF = html.indexOf('__next_f') !== -1;
+      console.log('[Claude Usage Monitor] Contains __next_f:', hasNextF);
+
+      // Look for __NEXT_DATA__ in any form
+      var hasNextData = html.indexOf('__NEXT_DATA__') !== -1;
+      console.log('[Claude Usage Monitor] Contains __NEXT_DATA__:', hasNextData);
+
+      // Search for key data patterns directly in HTML
+      var hasAmount = html.indexOf('"amount"') !== -1;
+      var hasCurrency = html.indexOf('"currency"') !== -1;
+      var hasSpent = html.indexOf('spent') !== -1;
+      var hasAutoReload = html.indexOf('auto_reload') !== -1;
+      console.log('[Claude Usage Monitor] Data patterns - amount:', hasAmount, 'currency:', hasCurrency, 'spent:', hasSpent, 'auto_reload:', hasAutoReload);
+
+      // Extract credit data directly from HTML
+      var creditIdx = html.indexOf('"amount"');
+      if (creditIdx !== -1) {
+        console.log('[Claude Usage Monitor] Context around "amount":', html.substring(Math.max(0, creditIdx - 50), creditIdx + 200));
+        var amountMatch = html.substring(creditIdx).match(/"amount"\s*:\s*(\d+)/);
+        if (amountMatch) {
+          result.creditAmount = parseInt(amountMatch[1]);
+          console.log('[Claude Usage Monitor] Found credit amount:', result.creditAmount);
         }
       }
 
-      // Also try non-string push format: self.__next_f.push([1, "..."])
-      var re2 = /self\.__next_f\.push\(\[\d+,"([\s\S]*?)"\]\)/g;
-      while ((m = re2.exec(html)) !== null) {
-        try {
-          var decoded2 = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-          if (chunks.indexOf(decoded2) === -1) chunks.push(decoded2);
-        } catch (e) { }
+      // Extract auto_reload
+      var arIdx = html.indexOf('auto_reload_settings');
+      if (arIdx !== -1) {
+        var arContext = html.substring(arIdx, arIdx + 300);
+        console.log('[Claude Usage Monitor] auto_reload context:', arContext);
+        var arEnabled = arContext.indexOf('"enabled":true') !== -1 || arContext.indexOf('"enabled": true') !== -1;
+        result.autoReloadEnabled = arEnabled;
+
+        var threshMatch = arContext.match(/threshold_in_minor_units["\s:]+(\d+)/);
+        if (threshMatch) result.autoReloadThreshold = parseInt(threshMatch[1]);
+
+        var reloadToMatch = arContext.match(/reload_to_in_minor_units["\s:]+(\d+)/);
+        if (reloadToMatch) result.autoReloadTo = parseInt(reloadToMatch[1]);
       }
 
-      var allText = chunks.join('\n');
-      console.log('[Claude Usage Monitor] Next.js chunks found:', chunks.length);
-      console.log('[Claude Usage Monitor] Combined chunk length:', allText.length);
+      // Extract currency
+      var currMatch = html.match(/"currency"\s*:\s*"(\w+)"/);
+      if (currMatch) result.creditCurrency = currMatch[1];
 
-      // --- Credit / Balance ---
-      // Pattern: {"amount":7959,"currency":"USD","auto_reload_settings":{"enabled":true,...}}
-      var creditMatch = allText.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
-      if (creditMatch) {
-        result.creditAmount = parseInt(creditMatch[1]);
-        result.creditCurrency = creditMatch[2];
-      }
-
-      // Auto-reload settings
-      var arMatch = allText.match(/"enabled"\s*:\s*(true|false)\s*,\s*"threshold_in_minor_units"\s*:\s*(\d+)\s*,\s*"reload_to_in_minor_units"\s*:\s*(\d+)/);
-      if (arMatch) {
-        result.autoReloadEnabled = arMatch[1] === 'true';
-        result.autoReloadThreshold = parseInt(arMatch[2]);
-        result.autoReloadTo = parseInt(arMatch[3]);
-      }
-
-      // --- Extra Usage ---
-      // "$X.XX spent" pattern in the page data
-      var spentMatch = allText.match(/\$(\d+\.?\d*)\s*spent/i);
+      // Extract "$X.XX spent"
+      var spentMatch = html.match(/\$(\d+\.?\d*)\s*spent/i);
       if (spentMatch) result.extraSpent = parseFloat(spentMatch[1]);
 
-      // Reset date "Resets Mar 1" etc.
-      var resetMatch = allText.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
+      // Extract "Resets Mon DD"
+      var resetMatch = html.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
       if (resetMatch) result.resetText = resetMatch[0];
 
-      // Spending limit - look for $40 pattern near "spending" or "limit"
-      var limitMatch = allText.match(/\$(\d+)\s*(?:spending|limit|monthly)/i);
+      // Extract spending limit
+      var limitMatch = html.match(/\$(\d+)\s*(?:\n|<|spending|limit)/i);
       if (limitMatch) result.spendingLimit = parseInt(limitMatch[1]);
 
-      // Also search for JSON patterns
-      var jsonSpentMatch = allText.match(/"(?:spent|usage_amount|extra_usage_spent)"\s*:\s*(\d+\.?\d*)/);
-      if (jsonSpentMatch && !result.extraSpent) result.extraSpent = parseFloat(jsonSpentMatch[1]);
-
-      var jsonLimitMatch = allText.match(/"(?:spending_limit|monthly_limit|extra_usage_limit|cap)"\s*:\s*(\d+\.?\d*)/);
-      if (jsonLimitMatch) result.spendingLimit = parseFloat(jsonLimitMatch[1]);
-
-      // If no chunks found, try the raw HTML
-      if (chunks.length === 0) {
-        console.log('[Claude Usage Monitor] No Next.js chunks, trying raw HTML...');
-
-        var htmlCredit = html.match(/"amount"\s*:\s*(\d+)\s*,\s*"currency"\s*:\s*"(\w+)"/);
-        if (htmlCredit) {
-          result.creditAmount = parseInt(htmlCredit[1]);
-          result.creditCurrency = htmlCredit[2];
-        }
-
-        var htmlSpent = html.match(/\$(\d+\.?\d*)\s*spent/i);
-        if (htmlSpent) result.extraSpent = parseFloat(htmlSpent[1]);
-
-        var htmlReset = html.match(/Resets?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)/i);
-        if (htmlReset) result.resetText = htmlReset[0];
-
-        // Sample for debugging
-        result.htmlSample = html.substring(0, 2000);
-      }
-
+      console.log('[Claude Usage Monitor] Parsed result:', JSON.stringify(result, null, 2));
       return result;
     })
     .catch(function (e) {
-      console.error('[Claude Usage Monitor] Page fetch error:', e.message);
+      console.error('[Claude Usage Monitor] Page fetch error:', e);
       return { error: e.message };
     });
 
