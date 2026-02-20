@@ -215,30 +215,28 @@ function renderCredit(data) {
 
 // ─── Render Extra Usage ───
 function renderExtraUsage(data) {
-  var spent = null, pct = null, resetText = null, limit = 40;
+  var spent = null, resetText = null, limit = 40;
 
   // RSC
   if (data.rsc) {
     if (data.rsc.amountSpent !== undefined) spent = data.rsc.amountSpent;
-    if (data.rsc.pctUsed !== undefined) pct = data.rsc.pctUsed;
     if (data.rsc.resetText) resetText = data.rsc.resetText;
   }
   // usage.extra_usage
   if (spent === null && data.usage && data.usage.extra_usage) {
     var eu = data.usage.extra_usage;
     spent = eu.spent || eu.amount;
-    pct = eu.utilization;
   }
   // DOM
   if (spent === null && data.dom) {
     if (data.dom.spent !== undefined) spent = data.dom.spent;
-    if (data.dom.pctUsed !== undefined) pct = data.dom.pctUsed;
-    if (data.dom.resetText) resetText = data.dom.resetText;
+    if (data.dom.resetText && !resetText) resetText = data.dom.resetText;
   }
 
   if (spent !== null) {
     document.getElementById('extraUsageCard').classList.remove('hidden');
-    if (pct === null) pct = Math.round((spent / limit) * 100);
+    // Always calculate percentage from spent/limit (don't scrape — it picks up Plan Usage's %)
+    var pct = Math.round((spent / limit) * 100);
     document.getElementById('extraSpent').textContent = '$' + spent.toFixed(2) + ' spent';
     document.getElementById('extraLimit').textContent = 'of $' + limit.toFixed(2);
     document.getElementById('extraFill').style.width = Math.min(pct, 100) + '%';
@@ -251,6 +249,7 @@ function renderExtraUsage(data) {
     console.log('[Claude Usage Monitor] No extra usage data found');
   }
 }
+
 
 // ─── Main ───
 async function fetchUsage() {
