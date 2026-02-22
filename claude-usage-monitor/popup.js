@@ -1,233 +1,249 @@
 let countdownInterval = null;
 
-// 从cookies中提取必要的ID
-function extractIdsFromCookies(cookies) {
-  const result = {
-    orgId: null,
-    anonymousId: null,
-    deviceId: null
-  };
-  
-  for (const cookie of cookies) {
-    switch (cookie.name) {
-      case 'lastActiveOrg':
-        result.orgId = cookie.value;
-        break;
-      case 'ajs_anonymous_id':
-        result.anonymousId = cookie.value;
-        break;
-      case 'anthropic-device-id':
-        result.deviceId = cookie.value;
-        break;
-    }
-  }
-  
-  return result;
+// ─── Color Helpers ───
+function getUsageColor(pct) {
+  if (pct >= 90) return '#ef4444';
+  if (pct >= 70) return '#f59e0b';
+  if (pct >= 50) return '#eab308';
+  return '#22c55e';
 }
 
-function getUsageColor(utilization) {
-  if (utilization >= 90) return '#ef4444';
-  if (utilization >= 70) return '#f59e0b';
-  if (utilization >= 50) return '#eab308';
-  return '#4ade80';
-}
-
+// ─── Time Formatting ───
 function formatCountdown(resetTime) {
-  const now = new Date();
-  const reset = new Date(resetTime);
-  const diff = reset - now;
-  
-  if (diff <= 0) return '即将重置...';
-  
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-  const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-  
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  const diff = new Date(resetTime) - new Date();
+  if (diff <= 0) return 'Resetting...';
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  return `${h}`.padStart(2, '0') + ':' + `${m}`.padStart(2, '0') + ':' + `${s}`.padStart(2, '0');
 }
 
-function formatResetTime(resetTime) {
-  const reset = new Date(resetTime);
-  return `重置于 ${reset.toLocaleString('zh-CN', { 
-    month: 'numeric', 
-    day: 'numeric',
-    hour: '2-digit', 
-    minute: '2-digit'
-  })}`;
+function formatResetBadge(resetTime) {
+  const diff = new Date(resetTime) - new Date();
+  if (diff <= 0) return 'Resetting...';
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  if (h > 0) return 'Resets in ' + h + ' hr ' + m + ' min';
+  return 'Resets in ' + m + ' min';
 }
 
+function formatResetDate(resetTime) {
+  return new Date(resetTime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Ring Update ───
+function updateRing(pct) {
+  const ring = document.getElementById('ringFill');
+  const c = 2 * Math.PI * 34;
+  ring.style.strokeDashoffset = c - (pct / 100) * c;
+  ring.style.stroke = getUsageColor(pct);
+  document.getElementById('ringPercent').textContent = pct + '%';
+}
+
+// ─── Countdown ───
 function startCountdown(resetTime) {
   if (countdownInterval) clearInterval(countdownInterval);
-  
-  const countdownEl = document.getElementById('countdown');
-  
-  const updateCountdown = () => {
-    const text = formatCountdown(resetTime);
-    countdownEl.textContent = text;
-    
-    // 根据剩余时间改变颜色
-    const now = new Date();
-    const reset = new Date(resetTime);
-    const diff = reset - now;
-    const hours = diff / (1000 * 60 * 60);
-    
-    if (hours < 1) {
-      countdownEl.style.color = '#4ade80';
-    } else if (hours < 2) {
-      countdownEl.style.color = '#fbbf24';
-    } else {
-      countdownEl.style.color = '#f87171';
-    }
+  const el = document.getElementById('countdown');
+  const badge = document.getElementById('resetBadge');
+  const tick = () => {
+    el.textContent = formatCountdown(resetTime);
+    badge.textContent = formatResetBadge(resetTime);
+    const h = (new Date(resetTime) - new Date()) / 3600000;
+    el.style.color = h < 1 ? '#22c55e' : h < 2 ? '#f59e0b' : '#1a1a1a';
   };
-  
-  updateCountdown();
-  countdownInterval = setInterval(updateCountdown, 1000);
+  tick();
+  countdownInterval = setInterval(tick, 1000);
 }
 
-function setStatus(status) {
-  const dot = document.getElementById('statusDot');
-  dot.className = 'status-dot ' + status;
+// ─── Status ───
+function setStatus(s, t) {
+  document.getElementById('statusDot').className = 'status-dot ' + s;
+  document.getElementById('statusText').textContent = t || '';
+}
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg; el.classList.add('show');
+  setStatus('error', 'Error');
+}
+function hideError() { document.getElementById('error').classList.remove('show'); }
+function updateLastUpdate(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  document.getElementById('lastUpdate').textContent =
+    'Last updated: ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
-function showError(message) {
-  const errorEl = document.getElementById('error');
-  errorEl.textContent = message;
-  errorEl.classList.add('show');
-  setStatus('error');
+// ─── Cookie Extraction ───
+function extractIdsFromCookies(cookies) {
+  const r = { orgId: null, anonymousId: null, deviceId: null };
+  for (const c of cookies) {
+    if (c.name === 'lastActiveOrg') r.orgId = c.value;
+    else if (c.name === 'ajs_anonymous_id') r.anonymousId = c.value;
+    else if (c.name === 'anthropic-device-id') r.deviceId = c.value;
+  }
+  return r;
 }
 
-function hideError() {
-  const errorEl = document.getElementById('error');
-  errorEl.classList.remove('show');
-}
+// ─── Render extra usage from content script data ───
+function renderExtraUsage(data) {
+  if (!data) return;
 
-function updateLastUpdate() {
-  const el = document.getElementById('lastUpdate');
-  el.textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
-}
+  if (data.extraSpent !== undefined) {
+    document.getElementById('extraUsageCard').classList.remove('hidden');
+    const limit = data.extraLimit || 40;
+    const pct = data.extraPercent || Math.round((data.extraSpent / limit) * 100);
 
-// 在页面上下文中执行的函数
-function executeInPage(orgId, anonymousId, deviceId) {
-  return fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
-    method: 'GET',
-    credentials: 'include',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'anthropic-anonymous-id': anonymousId || '',
-      'anthropic-client-platform': 'web_claude_ai',
-      'anthropic-client-sha': 'c7b39fd963cf6d1b28a4d1e59433bcc0124e946a',
-      'anthropic-client-version': '1.0.0',
-      'anthropic-device-id': deviceId || ''
-    }
-  })
-  .then(res => {
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  });
-}
+    document.getElementById('extraSpent').textContent = '$' + data.extraSpent.toFixed(2) + ' spent';
+    document.getElementById('extraLimit').textContent = 'of $' + limit.toFixed(2);
+    document.getElementById('extraFill').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('extraPercent').textContent = pct + '% used';
 
-async function fetchUsage() {
-  hideError();
-  setStatus('loading');
-  
-  try {
-    // 获取所有claude.ai的cookies
-    const cookies = await chrome.cookies.getAll({ domain: 'claude.ai' });
-    const ids = extractIdsFromCookies(cookies);
-    
-    if (!ids.orgId) {
-      showError('请先登录 claude.ai');
-      return;
-    }
-    
-    // 查找claude.ai标签页
-    const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
-    
-    if (tabs.length === 0) {
-      showError('请先打开 claude.ai 页面');
-      return;
-    }
-    
-    // 在页面上下文中执行请求
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tabs[0].id },
-      func: executeInPage,
-      args: [ids.orgId, ids.anonymousId, ids.deviceId]
-    });
-    
-    if (!results || results.length === 0 || results[0].result === undefined) {
-      throw new Error('执行失败');
-    }
-    
-    const data = results[0].result;
-    
-    if (data.five_hour) {
-      const utilization = Math.round(data.five_hour.utilization);
-      const remaining = 100 - utilization;
-      const resetTime = data.five_hour.resets_at;
-      
-      // 更新进度条
-      const fillEl = document.getElementById('usageFill');
-      fillEl.style.width = `${Math.max(utilization, 8)}%`;
-      fillEl.style.background = getUsageColor(utilization);
-      fillEl.textContent = `${utilization}%`;
-      
-      // 更新剩余百分比
-      document.getElementById('remaining').textContent = remaining;
-      
-      // 更新重置时间
-      document.getElementById('resetTime').textContent = formatResetTime(resetTime);
-      
-      // 启动倒计时
-      startCountdown(resetTime);
-      
-      // 更新状态
-      setStatus('');
-      updateLastUpdate();
-      
-      // 缓存数据
-      chrome.storage.local.set({ 
-        usage: data, 
-        lastUpdate: Date.now() 
-      });
-    } else {
-      throw new Error('无法获取使用量数据');
-    }
-  } catch (e) {
-    console.error('Fetch error:', e);
-    showError(`获取失败: ${e.message}`);
-    
-    // 尝试使用缓存数据
-    try {
-      const cached = await chrome.storage.local.get(['usage', 'lastUpdate']);
-      if (cached.usage && cached.usage.five_hour) {
-        const utilization = Math.round(cached.usage.five_hour.utilization);
-        const remaining = 100 - utilization;
-        
-        const fillEl = document.getElementById('usageFill');
-        fillEl.style.width = `${Math.max(utilization, 8)}%`;
-        fillEl.style.background = getUsageColor(utilization);
-        fillEl.textContent = `${utilization}%`;
-        
-        document.getElementById('remaining').textContent = remaining;
-        document.getElementById('lastUpdate').textContent = 
-          `缓存于 ${new Date(cached.lastUpdate).toLocaleTimeString('zh-CN')}`;
-      }
-    } catch (cacheError) {
-      console.error('Cache error:', cacheError);
+    if (data.extraResetText) {
+      document.getElementById('extraResetDate').textContent = data.extraResetText;
+      document.getElementById('extraResetBadge').textContent = data.extraResetText;
     }
   }
 }
 
-// 打开Claude页面
-function openClaude() {
-  chrome.tabs.create({ url: 'https://claude.ai' });
+// ─── Render credit/billing from content script data ───
+function renderCredit(data) {
+  if (!data) return;
+
+  if (data.creditBalance !== undefined) {
+    document.getElementById('billingCard').classList.remove('hidden');
+    document.getElementById('billingBalance').textContent = '$' + data.creditBalance.toFixed(2);
+
+    if (data.autoReloadOn) {
+      document.getElementById('autoReloadTag').classList.remove('hidden');
+    }
+  }
 }
 
-// 事件绑定
-document.getElementById('refreshBtn').addEventListener('click', fetchUsage);
-document.getElementById('openClaudeBtn').addEventListener('click', openClaude);
+// ─── Fetch live plan usage from API (this always works) ───
+async function fetchPlanUsage(orgId, anonymousId, deviceId) {
+  const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+  if (tabs.length === 0) return null;
 
-// 初始加载
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tabs[0].id },
+    func: function (orgId, anonId, devId) {
+      return fetch('https://claude.ai/api/organizations/' + orgId + '/usage?_t=' + Date.now(), {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'anthropic-anonymous-id': anonId || '',
+          'anthropic-client-platform': 'web_claude_ai',
+          'anthropic-client-sha': 'c7b39fd963cf6d1b28a4d1e59433bcc0124e946a',
+          'anthropic-client-version': '1.0.0',
+          'anthropic-device-id': devId || ''
+        }
+      }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    },
+    args: [orgId, anonymousId, deviceId]
+  });
+
+  return (results && results.length > 0) ? results[0].result : null;
+}
+
+// ─── Main ───
+async function fetchUsage() {
+  hideError();
+  setStatus('loading', 'Loading');
+
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: 'claude.ai' });
+    const ids = extractIdsFromCookies(cookies);
+    if (!ids.orgId) { showError('Please log in to claude.ai first'); return; }
+
+    // 1. Fetch live plan usage from API
+    const usage = await fetchPlanUsage(ids.orgId, ids.anonymousId, ids.deviceId);
+
+    if (usage && usage.five_hour) {
+      updateRing(Math.round(usage.five_hour.utilization));
+      startCountdown(usage.five_hour.resets_at);
+      document.getElementById('resetTime').textContent = formatResetDate(usage.five_hour.resets_at);
+    } else {
+      document.getElementById('ringPercent').textContent = 'N/A';
+      document.getElementById('countdown').textContent = '--:--:--';
+    }
+
+    // 2. Read extra usage + credit data from storage (saved by content script)
+    const stored = await chrome.storage.local.get(['usageData', 'lastUpdate']);
+
+    if (stored.usageData) {
+      renderExtraUsage(stored.usageData);
+      renderCredit(stored.usageData);
+
+      // Show how fresh the data is
+      if (stored.lastUpdate) {
+        const age = Date.now() - stored.lastUpdate;
+        const mins = Math.floor(age / 60000);
+        if (mins < 1) {
+          updateLastUpdate(stored.lastUpdate);
+        } else {
+          document.getElementById('lastUpdate').textContent =
+            'Usage data: ' + mins + ' min ago';
+        }
+      }
+    } else {
+      // No content script data yet — trigger a background refresh
+      console.log('[Claude Usage Monitor] No stored data, requesting background refresh...');
+      chrome.runtime.sendMessage({ type: 'REFRESH_REQUEST' });
+      document.getElementById('lastUpdate').textContent =
+        'Loading extra data... click Refresh in ~10s';
+    }
+
+    setStatus('', 'Connected');
+    if (!stored.usageData) {
+      updateLastUpdate();
+    }
+
+  } catch (e) {
+    console.error('[Claude Usage Monitor] Error:', e);
+    showError('Failed to fetch: ' + e.message);
+  }
+}
+
+// ─── Refresh button: trigger background hidden window ───
+async function handleRefresh() {
+  hideError();
+  setStatus('loading', 'Refreshing...');
+  document.getElementById('lastUpdate').textContent = 'Refreshing... please wait ~8s';
+
+  try {
+    // 1. Trigger background to open hidden settings page
+    chrome.runtime.sendMessage({ type: 'REFRESH_REQUEST' });
+
+    // 2. Wait 8 seconds for content script to extract data
+    await new Promise(r => setTimeout(r, 8500));
+
+    // 3. Now fetch everything fresh
+    await fetchUsage();
+  } catch (e) {
+    showError('Refresh failed: ' + e.message);
+  }
+}
+
+// ─── Listen for storage changes (content script updates) ───
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.usageData) {
+    console.log('[Claude Usage Monitor] Storage updated, refreshing UI');
+    const data = changes.usageData.newValue;
+    renderExtraUsage(data);
+    renderCredit(data);
+    updateLastUpdate();
+  }
+});
+
+// ─── Event Listeners ───
+document.getElementById('refreshBtn').addEventListener('click', handleRefresh);
+document.getElementById('openClaudeBtn').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://claude.ai' });
+});
+document.getElementById('openSettingsBtn').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://claude.ai/settings/usage' });
+});
+
+// ─── Init ───
 fetchUsage();
